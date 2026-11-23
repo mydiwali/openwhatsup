@@ -221,6 +221,9 @@ npm ci
 # Start API + Dashboard (config is auto-generated on first run)
 npm run dev
 
+# macOS / Linux / Windows — one line when session start says Chrome was not found
+npm run dev:all
+
 # Access (in dev the dashboard runs on the Vite server with hot reload)
 # Dashboard: http://localhost:2886
 # API: http://localhost:2785/api

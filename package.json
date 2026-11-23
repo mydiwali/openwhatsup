@@ -22,6 +22,7 @@
     "start:prod": "node dist/main",
     "prod": "npm run build:all && node dist/main",
     "dev": "concurrently -n api,dashboard -c blue,green \"npm run start:dev\" \"npm run dashboard:dev\"",
+    "dev:all": "puppeteer browsers install chrome && npm run dev",
     "dashboard:install": "cd dashboard && npm install",
     "dashboard:ci": "cd dashboard && npm ci",
     "dashboard:dev": "cd dashboard && npm run dev",

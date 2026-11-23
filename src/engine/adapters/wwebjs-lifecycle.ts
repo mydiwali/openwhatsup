@@ -23,6 +23,12 @@ import { reportRunningWebBuild } from './wwebjs-running-build';
 import { type WhatsAppWebJsConfig } from './whatsapp-web-js.adapter';
 import { AUTH_FAILURE_REASON, STALE_PROFILE_ADVICE } from '../terminal-engine-failure';
 import { wwjsAuthDir } from '../auth-dir-paths';
+import {
+  bundledPuppeteerChrome,
+  defaultChromeProbe,
+  resolveChromeForLaunch,
+  resolveSystemChrome,
+} from './system-chrome';
 
 /**
  * Detect Puppeteer's "Execution context was destroyed" error. During `Client.inject()` this is most
@@ -467,6 +473,17 @@ export class WwebjsLifecycle {
         this.host.logger.log(`Using auth timeout ${authTimeoutMs}ms`);
       }
 
+      // Puppeteer's cache is empty on a fresh laptop (and on any host whose PUPPETEER_CACHE_DIR
+      // does not contain the downloaded Chrome). A system Chrome, Chromium, or Edge still launches.
+      const browser = resolveChromeForLaunch({
+        configured: this.host.config.puppeteer?.executablePath,
+        bundled: bundledPuppeteerChrome,
+        system: () => resolveSystemChrome(defaultChromeProbe()),
+      });
+      if (browser.source === 'system' && browser.path) {
+        this.host.logger.log(`Puppeteer cache has no Chrome; using system browser ${browser.path}`);
+      }
+
       // One retry for a navigation-killed first inject (#1081): a WhatsApp Web reload landing
       // mid-inject rejects initialize() with nothing upstream ever retrying (see
       // isNavigationShapedInitRejection): on a start() the onError channel below is terminal, and a
@@ -475,7 +492,7 @@ export class WwebjsLifecycle {
       // spent (a retry the race SIGKILLs mid-launch would surface as a bare 504 with no reason), and
       // abandoned when attempt 1's browser cannot be destroyed (see resetForInitRetry).
       try {
-        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin);
+        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin, browser.path);
       } catch (attemptError) {
         const attemptReason = attemptError instanceof Error ? attemptError.message : String(attemptError);
         const budgetLeftMs = resolveEngineInitTimeoutMs() - (Date.now() - initStartedAt);
@@ -504,7 +521,7 @@ export class WwebjsLifecycle {
           );
           throw attemptError;
         }
-        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin);
+        await this.runInitAttempt(puppeteerArgs, authTimeoutMs, proxyAuthentication, versionPin, browser.path);
       }
     } catch (error) {
       // A stop, delete or force-kill closed the browser under the launch, which is what rejected it:
@@ -546,6 +563,9 @@ export class WwebjsLifecycle {
       }
       if (socksCredentialsDropped && PROXY_REFUSAL_REASON.test(reason))
         surfacedReason += ` ${SOCKS_CREDENTIALS_ADVICE}`;
+      if (/could not find chrome/i.test(reason)) {
+        surfacedReason += ' Run `npm run dev:all` (macOS / Linux / Windows) to install it, or install Google Chrome.';
+      }
       this.host.getCallbacks().onError?.(surfacedReason);
       throw error;
     }
@@ -563,6 +583,7 @@ export class WwebjsLifecycle {
     authTimeoutMs: number | undefined,
     proxyAuthentication: { username: string; password: string } | undefined,
     versionPin: Awaited<ReturnType<typeof resolveWebVersionPin>>,
+    executablePath: string | undefined,
   ): Promise<void> {
     // Range-checked at the sink, not only in configuration.ts: a plugin config written through
     // `PUT /api/plugins/whatsapp-web.js/config` is validated as an object and merged over the env
@@ -597,11 +618,10 @@ export class WwebjsLifecycle {
         handleSIGINT: false,
         handleSIGTERM: false,
         handleSIGHUP: false,
-        // Only override the executable when explicitly configured; otherwise let
-        // whatsapp-web.js fall back to Puppeteer's bundled Chromium.
-        ...(this.host.config.puppeteer?.executablePath
-          ? { executablePath: this.host.config.puppeteer.executablePath }
-          : {}),
+        // Set when the operator configured a binary, Puppeteer's cache has Chrome, or a system
+        // browser was found. Omitted only when none of those exist, so Puppeteer still reports
+        // "Could not find Chrome" and the caller can point at `npm run dev:all`.
+        ...(executablePath ? { executablePath } : {}),
         // Per-CDP-command budget, spread only when the host configured a usable one (see above).
         // Absent, puppeteer-core nullish-coalesces to its own 180 000 ms (`cdp/Connection.js`).
         ...(protocolTimeout !== undefined ? { protocolTimeout } : {}),
